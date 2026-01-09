@@ -5,8 +5,7 @@ A Tampermonkey userscript that prevents autoplay on YouTube's "Watch Later" play
 ## Installation
 
 1. Install [Violentmonkey](https://violentmonkey.github.io/) browser extension
-2. Click on [scriptYT.js](scriptYT.js)
-3. Click install
+2. [Click here to install](https://github.com/arprge/youtube-autoplay-stop/raw/refs/heads/main/scriptYT.user.js)
 
 ## Features
 

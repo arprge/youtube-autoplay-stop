@@ -1,35 +1,33 @@
 // ==UserScript==
-// @name         Youtube Autoplay Stop
-// @namespace    http://tampermonkey.net/
-// @version      3.2
-// @description  Stops autoplay on watch later videos
+// @name         YouTube Autoplay Stop
+// @namespace    https://github.com/arprge/youtube-autoplay-stop
+// @version      3.2.0
+// @description  Prevents autoplay on YouTube Watch Later playlist
 // @author       Alan
 // @match        https://www.youtube.com/*
 // @run-at       document-start
 // @grant        none
-// @sandbox      JavaScript
+// @license      MIT
+// @homepageURL  https://github.com/arprge/youtube-autoplay-stop
+// @updateURL    https://github.com/arprge/youtube-autoplay-stop/raw/main/scriptYT.js
+// @downloadURL  https://github.com/arprge/youtube-autoplay-stop/raw/main/scriptYT.js
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // Configuration
-    const PAUSE_THRESHOLD_SECONDS = 1;
-    const MONITORING_WINDOW_SECONDS = 60;
-    const CHECK_INTERVAL_MS = 1000;
-    const WATCH_LATER_LIST_ID = 'WL';
+    const PAUSE_THRESHOLD = 1;
+    const MONITOR_WINDOW = 60;
+    const CHECK_INTERVAL = 1000;
+    const WATCH_LATER_LIST = 'WL';
 
-    // State tracking
     let lastUrl = location.href;
     let currentVideo = null;
-    let isListenerAttached = false;
-    let hasPausedVideo = false;
+    let listenerActive = false;
+    let paused = false;
 
-    // Find and cache the active video element
     function getVideo() {
-        if (currentVideo && currentVideo.isConnected) {
-            return currentVideo;
-        }
+        if (currentVideo && currentVideo.isConnected) return currentVideo;
         currentVideo = document.querySelector('video.html5-main-video') ||
                        document.querySelector('video.video-stream') ||
                        document.querySelector('#movie_player video') ||
@@ -37,59 +35,52 @@
         return currentVideo;
     }
 
-    // Check if currently on "Watch Later" playlist
     function isWatchLater() {
-        return new URLSearchParams(window.location.search).get('list') === WATCH_LATER_LIST_ID;
+        return new URLSearchParams(window.location.search).get('list') === WATCH_LATER_LIST;
     }
 
-    // Pause video when approaching the end
     function onTimeUpdate() {
         const video = this;
-        if (video.paused || !video.duration || hasPausedVideo) return;
+        if (video.paused || !video.duration || paused) return;
 
-        if (video.duration - video.currentTime < PAUSE_THRESHOLD_SECONDS) {
+        if (video.duration - video.currentTime < PAUSE_THRESHOLD) {
             video.pause();
-            hasPausedVideo = true;
+            paused = true;
         }
     }
 
-    // Main monitoring loop
-    function mainLoop() {
-        // Detect navigation and reset state
+    function check() {
         if (location.href !== lastUrl) {
             lastUrl = location.href;
             currentVideo = null;
-            isListenerAttached = false;
-            hasPausedVideo = false;
+            listenerActive = false;
+            paused = false;
         }
 
         const video = getVideo();
 
-        // Exit if no valid video or not in Watch Later
         if (!video || !isWatchLater() || isNaN(video.duration)) {
-            if (isListenerAttached) {
+            if (listenerActive) {
                 video?.removeEventListener('timeupdate', onTimeUpdate);
-                isListenerAttached = false;
+                listenerActive = false;
             }
-            setTimeout(mainLoop, CHECK_INTERVAL_MS);
+            setTimeout(check, CHECK_INTERVAL);
             return;
         }
 
-        // Attach/detach listener based on proximity to video end
         const timeLeft = video.duration - video.currentTime;
-        const isNearEnd = timeLeft < MONITORING_WINDOW_SECONDS;
+        const nearEnd = timeLeft < MONITOR_WINDOW;
 
-        if (isNearEnd && !isListenerAttached) {
+        if (nearEnd && !listenerActive) {
             video.addEventListener('timeupdate', onTimeUpdate);
-            isListenerAttached = true;
-        } else if (!isNearEnd && isListenerAttached) {
+            listenerActive = true;
+        } else if (!nearEnd && listenerActive) {
             video.removeEventListener('timeupdate', onTimeUpdate);
-            isListenerAttached = false;
+            listenerActive = false;
         }
 
-        setTimeout(mainLoop, CHECK_INTERVAL_MS);
+        setTimeout(check, CHECK_INTERVAL);
     }
 
-    // Start monitoring after page load
-    setTimeout(mainLoop, 2000);
+    setTimeout(check, 2000);
 })();

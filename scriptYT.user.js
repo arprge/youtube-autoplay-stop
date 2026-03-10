@@ -9,7 +9,7 @@
 // @grant        none
 // @license      MIT
 // @homepageURL  https://github.com/arprge/youtube-autoplay-stop
-// @updateURL    https://github.com/arprge/youtube-autoplay-stop/raw/main/scriptYT.js
+// @updateURL    https://raw.githubusercontent.com/arprge/youtube-autoplay-stop/refs/heads/main/scriptYT.user.js
 // @downloadURL  https://github.com/arprge/youtube-autoplay-stop/raw/main/scriptYT.js
 // ==/UserScript==
 
@@ -84,3 +84,4 @@
 
     setTimeout(check, 2000);
 })();
+

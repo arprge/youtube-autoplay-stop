@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         YouTube Autoplay Stop
 // @namespace    https://github.com/arprge/youtube-autoplay-stop
-// @version      3.2.0
+// @version      4.2.0
 // @description  Prevents autoplay on YouTube Watch Later playlist
 // @author       Alan
 // @match        https://www.youtube.com/*
-// @run-at       document-start
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=youtube.com
+// @run-at       document-idle
 // @grant        none
 // @license      MIT
 // @homepageURL  https://github.com/arprge/youtube-autoplay-stop
@@ -13,75 +14,112 @@
 // @downloadURL  https://raw.githubusercontent.com/arprge/youtube-autoplay-stop/refs/heads/main/scriptYT.user.js
 // ==/UserScript==
 
-(function() {
+(() => {
     'use strict';
 
-    const PAUSE_THRESHOLD = 1;
-    const MONITOR_WINDOW = 60;
-    const CHECK_INTERVAL = 1000;
+    const BASE_PAUSE_THRESHOLD = 1.0; // seconds at 1x speed
     const WATCH_LATER_LIST = 'WL';
 
-    let lastUrl = location.href;
-    let currentVideo = null;
-    let listenerActive = false;
-    let paused = false;
+    let attachedVideo = null;
+    let listenerController = null;
+    let hasPausedThisPlay = false;
 
-    function getVideo() {
-        if (currentVideo && currentVideo.isConnected) return currentVideo;
-        currentVideo = document.querySelector('video.html5-main-video') ||
-                       document.querySelector('video.video-stream') ||
-                       document.querySelector('#movie_player video') ||
-                       document.querySelector('video');
-        return currentVideo;
+    function getPlayer() {
+        return document.getElementById('movie_player');
     }
 
-    function isWatchLater() {
-        return new URLSearchParams(window.location.search).get('list') === WATCH_LATER_LIST;
+    function isWatchLater(player) {
+        const urlList = new URLSearchParams(window.location.search).get('list');
+        if (urlList !== null) {
+            return urlList === WATCH_LATER_LIST;
+        }
+        // Fallback for miniplayer mode when browsing off /watch
+        if (typeof player?.getPlaylistId === 'function') {
+            return player.getPlaylistId() === WATCH_LATER_LIST;
+        }
+        return false;
     }
 
-    function onTimeUpdate() {
-        const video = this;
-        if (video.paused || !video.duration || paused) return;
+    function isAdPlaying(player) {
+        if (!player) return false;
+        return (
+            player.classList.contains('ad-showing') ||
+            player.classList.contains('ad-interrupting') ||
+            player.getAdState?.() === 1
+        );
+    }
 
-        if (video.duration - video.currentTime < PAUSE_THRESHOLD) {
+    function pausePlayback(player, video) {
+        if (typeof player?.pauseVideo === 'function') {
+            player.pauseVideo();
+        } else {
             video.pause();
-            paused = true;
         }
     }
 
-    function check() {
-        if (location.href !== lastUrl) {
-            lastUrl = location.href;
-            currentVideo = null;
-            listenerActive = false;
-            paused = false;
-        }
+    function checkPlaybackBoundary(event) {
+        const video = event.currentTarget;
+        const player = getPlayer();
 
-        const video = getVideo();
+        if (!isWatchLater(player) || isAdPlaying(player)) return;
+        if (video.paused || !Number.isFinite(video.duration) || video.duration <= 0) return;
 
-        if (!video || !isWatchLater() || isNaN(video.duration)) {
-            if (listenerActive) {
-                video?.removeEventListener('timeupdate', onTimeUpdate);
-                listenerActive = false;
-            }
-            setTimeout(check, CHECK_INTERVAL);
-            return;
-        }
-
+        // Scale threshold with playback speed (e.g., 2.0s buffer at 2x speed)
+        const threshold = Math.max(BASE_PAUSE_THRESHOLD, BASE_PAUSE_THRESHOLD * video.playbackRate);
         const timeLeft = video.duration - video.currentTime;
-        const nearEnd = timeLeft < MONITOR_WINDOW;
 
-        if (nearEnd && !listenerActive) {
-            video.addEventListener('timeupdate', onTimeUpdate);
-            listenerActive = true;
-        } else if (!nearEnd && listenerActive) {
-            video.removeEventListener('timeupdate', onTimeUpdate);
-            listenerActive = false;
+        if (timeLeft <= threshold) {
+            if (!hasPausedThisPlay) {
+                pausePlayback(player, video);
+                hasPausedThisPlay = true;
+            }
+        } else if (hasPausedThisPlay && timeLeft > threshold + 2) {
+            // Reset if the user manually rewound past the threshold buffer
+            hasPausedThisPlay = false;
         }
-
-        setTimeout(check, CHECK_INTERVAL);
     }
 
-    setTimeout(check, 2000);
-})();
+    function resetPauseState() {
+        hasPausedThisPlay = false;
+    }
 
+    const mountObserver = new MutationObserver(() => {
+        if (attachToVideo()) {
+            mountObserver.disconnect();
+        }
+    });
+
+    function attachToVideo() {
+        // Scope strictly to #movie_player to ignore homepage hover-preview videos
+        const video = document.querySelector('#movie_player video.html5-main-video');
+        if (!video) return false;
+        if (video === attachedVideo && video.isConnected) return true;
+
+        listenerController?.abort();
+        listenerController = new AbortController();
+        const { signal } = listenerController;
+
+        attachedVideo = video;
+        hasPausedThisPlay = false;
+
+        video.addEventListener('timeupdate', checkPlaybackBoundary, { signal });
+        video.addEventListener('seeked', checkPlaybackBoundary, { signal });
+        video.addEventListener('loadedmetadata', resetPauseState, { signal });
+        video.addEventListener('emptied', resetPauseState, { signal });
+
+        return true;
+    }
+
+    function syncPlayer() {
+        hasPausedThisPlay = false;
+        if (!attachToVideo() && document.body) {
+            mountObserver.observe(document.body, { childList: true, subtree: true });
+        }
+    }
+
+    for (const eventName of ['yt-navigate-finish', 'yt-page-data-fetched', 'yt-player-updated']) {
+        document.addEventListener(eventName, syncPlayer);
+    }
+
+    syncPlayer();
+})();

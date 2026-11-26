@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Autoplay Stop
 // @namespace    https://github.com/arprge/youtube-autoplay-stop
-// @version      4.2.1
+// @version      4.2.2
 // @description  Prevents autoplay on YouTube Watch Later playlist
 // @author       Alan
 // @match        https://www.youtube.com/*
@@ -23,12 +23,14 @@
 
     const BASE_PAUSE_THRESHOLD = 1.0; // seconds at 1x speed
     const WATCH_LATER_LIST = 'WL';
+    const PATCHED_MANAGER = Symbol('wlAutoplayPatched');
 
     let attachedVideo = null;
     let listenerController = null;
     let hasPausedThisPlay = false;
 
     const getPlayer = () => document.getElementById('movie_player');
+    const isShortsPage = () => window.location.pathname.startsWith('/shorts');
 
     const isWatchLater = (player) => {
         const urlList = new URLSearchParams(window.location.search).get('list');
@@ -57,10 +59,55 @@
         }
     };
 
+    const getPropertyDescriptor = (obj, prop) => {
+        let current = obj;
+        while (current && current !== Object.prototype) {
+            const desc = Object.getOwnPropertyDescriptor(current, prop);
+            if (desc) return desc;
+            current = Object.getPrototypeOf(current);
+        }
+        return undefined;
+    };
+
+    // Fallback for throttled/background tabs: prevent yt-playlist-manager from advancing Watch Later
+    const guardPlaylistManager = () => {
+        const manager = document.querySelector('yt-playlist-manager');
+        if (!manager || manager[PATCHED_MANAGER]) return;
+
+        const ownDesc = Object.getOwnPropertyDescriptor(manager, 'canAutoAdvance_');
+        if (ownDesc && !ownDesc.configurable) return;
+
+        const desc = ownDesc ?? getPropertyDescriptor(Object.getPrototypeOf(manager), 'canAutoAdvance_');
+        let actualValue = desc && 'value' in desc ? desc.value : (manager.canAutoAdvance_ ?? true);
+
+        try {
+            Object.defineProperty(manager, 'canAutoAdvance_', {
+                configurable: true,
+                enumerable: true,
+                get() {
+                    if (isWatchLater(getPlayer())) {
+                        return false;
+                    }
+                    return desc?.get ? desc.get.call(this) : actualValue;
+                },
+                set(value) {
+                    if (desc?.set) {
+                        desc.set.call(this, value);
+                    } else {
+                        actualValue = value;
+                    }
+                },
+            });
+            manager[PATCHED_MANAGER] = true;
+        } catch {
+            // Ignore if the element prevents property redefinition
+        }
+    };
+
     const checkPlaybackBoundary = ({ currentTarget: video }) => {
         const player = getPlayer();
 
-        if (!isWatchLater(player) || isAdPlaying(player)) return;
+        if (isShortsPage() || !isWatchLater(player) || isAdPlaying(player)) return;
         if (video.paused || !Number.isFinite(video.duration) || video.duration <= 0) return;
 
         // Scale threshold with playback speed (e.g., 2.0s buffer at 2x speed)
@@ -83,6 +130,8 @@
     };
 
     const attachToVideo = () => {
+        guardPlaylistManager();
+
         // Scope strictly to #movie_player to ignore homepage hover-preview videos
         const video = document.querySelector('#movie_player video.html5-main-video');
         if (!video) return false;
@@ -95,7 +144,7 @@
         attachedVideo = video;
         hasPausedThisPlay = false;
 
-        for (const eventName of ['timeupdate', 'seeked']) {
+        for (const eventName of ['timeupdate', 'seeked', 'ratechange', 'playing']) {
             video.addEventListener(eventName, checkPlaybackBoundary, { signal });
         }
         for (const eventName of ['loadedmetadata', 'emptied']) {
@@ -113,6 +162,15 @@
 
     const syncPlayer = () => {
         hasPausedThisPlay = false;
+
+        if (isShortsPage()) {
+            mountObserver.disconnect();
+            listenerController?.abort();
+            listenerController = null;
+            attachedVideo = null;
+            return;
+        }
+
         if (attachToVideo()) {
             mountObserver.disconnect();
             return;

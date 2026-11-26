@@ -186,6 +186,7 @@
     for (const eventName of ['yt-navigate-finish', 'yt-page-data-fetched', 'yt-player-updated']) {
         document.addEventListener(eventName, syncPlayer);
     }
+    window.navigation?.addEventListener('navigatesuccess', syncPlayer);
 
     syncPlayer();
 })();
